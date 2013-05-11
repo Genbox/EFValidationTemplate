@@ -1,0 +1,393 @@
+﻿<#@ template language="C#" debug="true" hostspecific="true"#>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ include file="EF.Utility.CS.ttinclude"#>
+<#@ output extension=".cs"#>
+<#
+UserSettings userSettings = new UserSettings
+							{
+								SourceCsdlPath = @"MyModel.edmx",
+								FullyQualifySystemTypes = false,
+								CamelCaseFields = false,
+							};
+
+ApplyUserSettings(userSettings);
+
+if(Errors.HasErrors)
+    return String.Empty;
+
+MetadataLoader loader = new MetadataLoader(this);
+CodeGenerationTools code = new CodeGenerationTools(this){FullyQualifySystemTypes = userSettings.FullyQualifySystemTypes, CamelCaseFields = userSettings.CamelCaseFields};
+
+ItemCollection = loader.CreateEdmItemCollection(SourceCsdlPath, ReferenceCsdlPaths.ToArray());
+ModelNamespace = loader.GetModelNamespace(SourceCsdlPath);
+string namespaceName = code.VsNamespaceSuggestion();
+UpdateObjectNamespaceMap(namespaceName);
+#>
+using System;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Data.Objects.DataClasses;
+
+namespace <#=namespaceName#>
+{
+	<#
+	    foreach (EntityType entity in GetSourceSchemaTypes<EntityType>().OrderBy(e => e.Name))
+	    {
+	#>
+	
+	[MetadataType(typeof(<#=code.Escape(entity)#>Metadata))]
+	<#=Accessibility.ForType(entity)#> <#=code.SpaceAfter(code.AbstractOption(entity))#>partial class <#=code.Escape(entity)#>
+	{
+		[DisplayName("<#=FixName(code.Escape(entity))#>")]		
+		internal sealed class <#=code.Escape(entity)#>Metadata
+		{
+		<#
+			bool first = true;
+			foreach (EdmProperty property in entity.Properties.Where(p => p.DeclaringType == entity && p.TypeUsage.EdmType is PrimitiveType))
+	        {
+				if (first)
+		        {
+		            WriteLine(string.Empty);
+		            first = false;
+		        }
+	            WritePrimitiveTypeProperty(property, code);
+	        }
+
+			foreach (NavigationProperty navProperty in entity.NavigationProperties.Where(n => n.DeclaringType == entity))
+			{
+				WriteNavigationTypeProperty(navProperty, code);
+			}
+		#>
+		}
+	}
+	
+	<#
+		}
+		WriteLine(string.Empty);
+	#>
+}
+
+
+<#+
+
+   //  Write PrimitiveType Properties.
+   private void WriteNavigationTypeProperty(NavigationProperty navProperty, CodeGenerationTools code)
+   {
+#>
+			[DisplayName("<#=FixName(code.Escape(navProperty))#>")]
+			<#=code.SpaceAfter(NewModifier(navProperty)) + Accessibility.ForProperty(navProperty)#> EntityCollection<<#=MultiSchemaEscape(navProperty.ToEndMember.GetEntityType(), code)#>> <#=code.Escape(navProperty)#> { get; set; }
+
+<#+
+    }
+
+    //  Write PrimitiveType Properties.
+    private void WritePrimitiveTypeProperty(EdmProperty property, CodeGenerationTools code)
+    {
+        MetadataTools ef = new MetadataTools(this);
+		string dataTypeAtt = GetDataTypeAttribute(property, ef);
+
+		if (!property.Nullable)
+		{
+#>
+			[Required(ErrorMessage="<#=FixName(code.Escape(property))#> is required")]
+<#+ 
+		}
+
+		foreach (Facet facet in property.TypeUsage.Facets)
+        {
+        	if (facet.Name == "MaxLength" && facet.Value != null && facet.IsUnbounded == false && ef.ClrType(property.TypeUsage) == typeof(string))
+        	{
+        	    int minLength = 0;
+        	    int maxLength = (int)facet.Value;
+
+        	    Facet obj = property.TypeUsage.Facets.SingleOrDefault(f => f.Name == "FixedLength" && f.Value != null);
+        	    if (obj != null && (bool) obj.Value)
+        	        minLength = maxLength;
+
+#>
+			[StringLength(<#=maxLength#>, MinimumLength=<#=minLength#>)]
+<#+
+			}
+		}
+
+		if (ef.ClrType(property.TypeUsage) == typeof (DateTime))
+		{
+#>
+            [DisplayFormat(DataFormatString = "{0:dd/MM/yyyy}")]
+			[Range(typeof(DateTime),"<#=DateTime.MinValue.ToString("yyyy-MM-dd")#>", "<#=DateTime.MaxValue.ToString("yyyy-MM-dd")#>", ErrorMessage = "Value for {0} must be between {1} and {2}.")]
+<#+
+		}
+		else if (ef.ClrType(property.TypeUsage) == typeof (int))
+		{
+#>
+			[Range(0, <#=int.MaxValue#>, ErrorMessage = "Value for {0} must be between {1} and {2}.")]
+<#+
+		}
+		else if (ef.ClrType(property.TypeUsage) == typeof (float))
+		{
+#>
+			[Range(0, <#=float.MaxValue#>, ErrorMessage = "Value for {0} must be between {1} and {2}.")]
+<#+
+		}
+
+		var propLower = property.Name.ToLower();
+		if (propLower.Contains("url"))
+		{
+#>
+			[RegularExpression(@"((([A-Za-z]{3,9}:(?:\/\/)?)(?:[-;:&=\+\$,\w]+@)?[A-Za-z0-9.-]+|(?:www.|[-;:&=\+\$,\w]+@)[A-Za-z0-9.-]+)((?:\/[\+~%\/.\w-_]*)?\??(?:[-\+=&;%@.\w_]*)#?(?:[\w]*))?)", ErrorMessage = "Please enter a valid URL")]
+<#+
+		}
+		else if (propLower.Contains("email"))
+		{
+#>
+			[RegularExpression(@"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", ErrorMessage = "Please enter a valid email")]
+<#+
+		}
+		if (dataTypeAtt != String.Empty)
+		{
+#>
+			<#=dataTypeAtt #>
+<#+
+		}		
+#>
+			[DisplayName("<#= FixName(property.Name) #>")]
+<#+	
+#>
+    		<#=code.SpaceAfter(NewModifier(property))#><#=Accessibility.ForProperty(property)#> <#=ef.ClrType(property.TypeUsage).Name#> <#=code.Escape(property)#> { get; set; }
+
+<#+
+	}
+
+	public string FixName(string propName)
+	{
+	    string loweredName = propName.ToLower();
+
+		if (loweredName != "id" && loweredName.EndsWith("id"))
+			propName = propName.Replace("Id","").Replace("ID","");
+
+	    string split =Regex.Replace(propName,"([A-Z])"," $1",RegexOptions.Compiled).Trim().ToLower();
+	    return char.ToUpper(split[0]) + split.Substring(1).Trim();
+	}
+
+	public string GetDataTypeAttribute(EdmProperty property, MetadataTools ef)
+	{
+		var propLower = property.Name.ToLower();
+
+		if (ef.ClrType(property.TypeUsage) == typeof(DateTime))
+			return "[DataType(DataType.DateTime)]";
+		
+		if (propLower.Contains("phone"))
+			return "[DataType(DataType.PhoneNumber)]";
+		
+		if (propLower.Contains("html"))
+			return "[DataType(DataType.Html)]";
+		
+		if (propLower.Contains("email"))
+			return "[DataType(DataType.EmailAddress)]";
+		
+		if (propLower.Contains("url"))
+			return "[DataType(DataType.Url)]";
+		
+		if (propLower.Contains("text"))
+			return "[DataType(DataType.Text)]";
+
+		if (propLower.Contains("password"))
+			return "[DataType(DataType.Password)]";
+
+		if (propLower.Contains("time"))
+			return "[DataType(DataType.Time)]";
+
+		return String.Empty;
+	}
+
+	// Declare Template Public Properties.
+    private string SourceCsdlPath{ get; set; }
+    private string ModelNamespace{ get; set; }
+    private EdmItemCollection ItemCollection{ get; set; }
+    private IEnumerable<string> ReferenceCsdlPaths{ get; set; }
+    private Nullable<bool> CreateContextAddToMethods{ get; set; }
+
+    private Dictionary<string, string> EdmToObjectNamespaceMap
+	{
+		get { return _edmToObjectNamespaceMap; }
+		set { _edmToObjectNamespaceMap = value; }
+	}
+
+    private Dictionary<string, string> _edmToObjectNamespaceMap = new Dictionary<string, string>();
+
+	static System.Resources.ResourceManager ResourceManager
+	{
+		get
+		{
+			if (_resourceManager == null)
+			{
+				System.Resources.ResourceManager resourceManager = new System.Resources.ResourceManager("System.Data.Entity.Design", typeof(MetadataItemCollectionFactory).Assembly);
+				System.Threading.Interlocked.CompareExchange(ref _resourceManager, resourceManager, null);
+			}
+			return _resourceManager;
+		}
+	}
+
+	static System.Resources.ResourceManager _resourceManager;
+
+#>
+<#+
+
+private static string GetResourceString(string resourceName)
+{
+    return ResourceManager.GetString(resourceName, null); //  Take default culture.
+}
+
+void ApplyUserSettings(UserSettings userSettings)
+{
+    //  Setup template UserSettings.
+    if (SourceCsdlPath == null)
+    {
+#if !PREPROCESSED_TEMPLATE
+        if(userSettings.SourceCsdlPath == "$" + "edmxInputFile" + "$")
+        {
+            Errors.Add(new CompilerError(Host.TemplateFile, 0, 0, "", GetResourceString("Template_ReplaceVsItemTemplateToken")));
+            return;
+        }
+
+        SourceCsdlPath = Host.ResolvePath(userSettings.SourceCsdlPath);
+#else
+        SourceCsdlPath = userSettings.SourceCsdlPath;
+#endif
+    }
+
+    // normalize the path, remove ..\ from it
+    SourceCsdlPath = Path.GetFullPath(SourceCsdlPath);
+
+
+    if (ReferenceCsdlPaths == null)
+        ReferenceCsdlPaths = userSettings.ReferenceCsdlPaths;
+
+    if (!CreateContextAddToMethods.HasValue)
+        CreateContextAddToMethods = userSettings.CreateContextAddToMethods;
+
+    DefaultSummaryComment = GetResourceString("Template_CommentNoDocumentation");
+}
+
+class UserSettings
+{
+    public string SourceCsdlPath{ get; set; }
+    public string[] ReferenceCsdlPaths{ get; set; }
+    public bool FullyQualifySystemTypes{ get; set; }
+    public bool CreateContextAddToMethods{ get; set; }
+    public bool CamelCaseFields{ get; set; }
+}
+
+private string NewModifier(NavigationProperty navigationProperty)
+{
+	Type baseType = typeof(EntityObject);
+	return NewModifier(baseType, navigationProperty.Name);
+}
+
+private string MultiSchemaEscape(StructuralType type, CodeGenerationTools code)
+{
+	if (type.NamespaceName != ModelNamespace)
+	{
+		return code.CreateFullName(code.EscapeNamespace(GetObjectNamespace(type.NamespaceName)), code.Escape(type));
+	}
+
+	return code.Escape(type);
+}
+
+private string GetObjectNamespace(string csdlNamespaceName)
+{
+	string objectNamespace;
+	if (EdmToObjectNamespaceMap.TryGetValue(csdlNamespaceName, out objectNamespace))
+	{
+		return objectNamespace;
+	}
+
+	return csdlNamespaceName;
+}
+
+private string NewModifier(EdmProperty property)
+{
+    Type baseType;
+    if (property.DeclaringType.BuiltInTypeKind == BuiltInTypeKind.EntityType)
+        baseType = typeof(EntityObject);
+    else
+        baseType = typeof(ComplexObject);
+    
+	return NewModifier(baseType, property.Name);
+}
+
+private string NewModifier(Type type, string memberName)
+{
+    if (HasBaseMemberWithMatchingName(type, memberName))
+        return "new";
+    
+	return string.Empty;
+}
+
+static bool HasBaseMemberWithMatchingName(Type type, string memberName)
+{
+    BindingFlags bindingFlags = BindingFlags.FlattenHierarchy | BindingFlags.NonPublic | BindingFlags.Public
+                | BindingFlags.Instance | BindingFlags.Static;
+    return type.GetMembers(bindingFlags).Where(m => IsVisibleMember(m)).Any(m => m.Name == memberName);
+}
+
+static bool IsVisibleMember(MemberInfo memberInfo)
+{
+    if (memberInfo is EventInfo)
+    {
+        EventInfo ei = (EventInfo)memberInfo;
+        MethodInfo add = ei.GetAddMethod();
+        MethodInfo remove = ei.GetRemoveMethod();
+        return IsVisibleMethod(add) || IsVisibleMethod(remove);
+    }
+    else if (memberInfo is FieldInfo)
+    {
+        FieldInfo fi = (FieldInfo)memberInfo;
+        return !fi.IsPrivate && !fi.IsAssembly;
+    }
+    else if (memberInfo is MethodBase)
+    {
+        MethodBase mb = (MethodBase)memberInfo;
+        if (mb.IsSpecialName)
+            return false;
+        return IsVisibleMethod(mb);
+    }
+    else if (memberInfo is PropertyInfo)
+    {
+        PropertyInfo pi = (PropertyInfo)memberInfo;
+        MethodInfo get = pi.GetGetMethod();
+        MethodInfo set = pi.GetSetMethod();
+        return IsVisibleMethod(get) || IsVisibleMethod(set);
+    }
+
+    return false;
+}
+
+static bool IsVisibleMethod(MethodBase methodBase)
+{
+    if (methodBase == null)
+        return false;
+
+    return !methodBase.IsPrivate && !methodBase.IsAssembly;
+}
+
+IEnumerable<T> GetSourceSchemaTypes<T>() where T : GlobalItem
+{
+    if (Path.GetExtension(SourceCsdlPath) != ".edmx")
+        return ItemCollection.GetItems<T>().Where(e => e.MetadataProperties.Any(mp => mp.Name == "SchemaSource" && (string)mp.Value == SourceCsdlPath));
+    
+	return ItemCollection.GetItems<T>();
+}
+
+    void UpdateObjectNamespaceMap(string objectNamespace)
+{
+	if(objectNamespace != ModelNamespace && !EdmToObjectNamespaceMap.ContainsKey(ModelNamespace))
+	{
+		EdmToObjectNamespaceMap.Add(ModelNamespace, objectNamespace);	
+	}
+}
+
+string DefaultSummaryComment{ get; set; }
+
+#>
