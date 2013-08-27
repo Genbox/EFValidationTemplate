@@ -7,6 +7,7 @@
 UserSettings userSettings = new UserSettings
 							{
 								SourceCsdlPath = @"MyModel.edmx",
+								ReferenceCsdlPaths = new string[] {},
 								FullyQualifySystemTypes = false,
 								CamelCaseFields = false,
 							};
@@ -21,7 +22,7 @@ CodeGenerationTools code = new CodeGenerationTools(this){FullyQualifySystemTypes
 
 ItemCollection = loader.CreateEdmItemCollection(SourceCsdlPath, ReferenceCsdlPaths.ToArray());
 ModelNamespace = loader.GetModelNamespace(SourceCsdlPath);
-string namespaceName = code.VsNamespaceSuggestion();
+string namespaceName = code.VsNamespaceSuggestion() ?? "Metadata";
 UpdateObjectNamespaceMap(namespaceName);
 #>
 using System;
